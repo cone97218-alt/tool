@@ -3,7 +3,7 @@
 // 入口注入魔法棒菜单（#extensionsMenu），可选注入 QR 栏快捷日志按钮（#qr--bar）
 
 (() => {
-  const VERSION = '1.6.0';
+  const VERSION = '1.6.1';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
   const MAX_PROMPT_LOGS = 5;
 
@@ -70,6 +70,7 @@
   let lastGenType = 'normal';
   let wandTimer = null;
   let qrTimer = null;
+  let qrDebounceTimer = null;
   let qrObserver = null;
 
   if (typeof globalThis.__ctx2toolCleanup === 'function') {
@@ -484,11 +485,37 @@
       clearTimeout(qrTimer);
       qrTimer = null;
     }
+    if (qrDebounceTimer) {
+      clearTimeout(qrDebounceTimer);
+      qrDebounceTimer = null;
+    }
     if (qrObserver) {
       qrObserver.disconnect();
       qrObserver = null;
     }
     parentDoc.getElementById('ctx2tool-qr-log-btn')?.remove();
+  }
+
+  function ensureQrButtonInDom() {
+    if (!CONFIG.showQrLogBtn) return false;
+    const qrBar = parentDoc.getElementById('qr--bar');
+    if (!qrBar) return false;
+
+    const container = qrBar.querySelector('.qr--buttons') || qrBar;
+    const existing = parentDoc.getElementById('ctx2tool-qr-log-btn');
+    if (existing && container.contains(existing)) return true;
+    if (existing) existing.remove();
+
+    const btn = parentDoc.createElement('div');
+    btn.id = 'ctx2tool-qr-log-btn';
+    btn.className = 'qr--button menu_button interactable';
+    btn.innerHTML = ICON_LOG;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      openPanel('logs');
+    };
+    container.appendChild(btn);
+    return true;
   }
 
   function mountQrLogBtn(retry = 0) {
@@ -497,34 +524,26 @@
       return;
     }
 
-    const qrBar = parentDoc.getElementById('qr--bar');
-    if (!qrBar) {
-      if (retry < 30) {
-        qrTimer = setTimeout(() => mountQrLogBtn(retry + 1), 400);
-      }
-      return;
+    const ok = ensureQrButtonInDom();
+    if (!ok && retry < 30) {
+      if (qrTimer) clearTimeout(qrTimer);
+      qrTimer = setTimeout(() => mountQrLogBtn(retry + 1), 350);
     }
 
-    const container = qrBar.querySelector('.qr--buttons') || qrBar;
-    if (!parentDoc.getElementById('ctx2tool-qr-log-btn')) {
-      const btn = parentDoc.createElement('div');
-      btn.id = 'ctx2tool-qr-log-btn';
-      btn.className = 'qr--button menu_button interactable';
-      btn.innerHTML = ICON_LOG;
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        openPanel('logs');
-      };
-      container.appendChild(btn);
-    }
-
+    // 监听不会被切换聊天销毁的稳定父容器（#form_sheld / #send_form / body）
     if (!qrObserver) {
+      const watchTarget =
+        parentDoc.getElementById('form_sheld') ||
+        parentDoc.getElementById('send_form') ||
+        parentDoc.body;
       qrObserver = new MutationObserver(() => {
-        if (CONFIG.showQrLogBtn && !parentDoc.getElementById('ctx2tool-qr-log-btn')) {
-          mountQrLogBtn(0);
-        }
+        if (!CONFIG.showQrLogBtn) return;
+        if (qrDebounceTimer) clearTimeout(qrDebounceTimer);
+        qrDebounceTimer = setTimeout(() => {
+          ensureQrButtonInDom();
+        }, 120);
       });
-      qrObserver.observe(qrBar, { childList: true, subtree: true });
+      qrObserver.observe(watchTarget, { childList: true, subtree: true });
     }
   }
 
@@ -924,6 +943,12 @@
     lastGenType = type || 'normal';
   };
 
+  const chatChangedHandler = () => {
+    if (!CONFIG.showQrLogBtn) return;
+    setTimeout(() => ensureQrButtonInDom(), 150);
+    setTimeout(() => ensureQrButtonInDom(), 600);
+  };
+
   const handler = (data) => {
     if (!CONFIG.enabled) return;
 
@@ -1046,6 +1071,9 @@
   if (tavern_events.GENERATION_STARTED) {
     eventOn(tavern_events.GENERATION_STARTED, genStartHandler);
   }
+  if (tavern_events.CHAT_CHANGED) {
+    eventOn(tavern_events.CHAT_CHANGED, chatChangedHandler);
+  }
   eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
 
   globalThis.__ctx2toolCleanup = () => {
@@ -1054,6 +1082,9 @@
     if (typeof eventRemoveListener === 'function') {
       if (tavern_events.GENERATION_STARTED) {
         eventRemoveListener(tavern_events.GENERATION_STARTED, genStartHandler);
+      }
+      if (tavern_events.CHAT_CHANGED) {
+        eventRemoveListener(tavern_events.CHAT_CHANGED, chatChangedHandler);
       }
       eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
     }
