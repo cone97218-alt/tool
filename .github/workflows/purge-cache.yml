@@ -1,0 +1,16 @@
+name: Purge jsDelivr Cache
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Purge jsDelivr cache for index.js
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          curl -sS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${BRANCH}/index.js"
