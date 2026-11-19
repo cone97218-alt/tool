@@ -1,12 +1,15 @@
 // SillyTavern (TavernHelper / JS-Slash-Runner) 远程全局脚本
 // 功能：在 Chat Completion 请求发出前，将上下文/预设打包塞入 tools[i].function.description
-// 并提供手机端 toastr 提示与悬浮日志面板
+// 内置手机端可视化配置面板 + 日志查看器（配置自动保存在浏览器 localStorage）
 
 (() => {
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
+  const STORAGE_KEY = 'ctx2tool_settings_v1';
 
-  // 允许在酒馆助手的加载器里通过 window.CTX2TOOL_CONFIG 覆盖默认配置
   const DEFAULT_CONFIG = {
+    // 总开关：关闭后不拦截、不修改任何请求
+    enabled: true,
+
     // 'all'                  = 除最后一条外全部塞进工具描述（最后一条留在 messages）
     // 'all_with_placeholder' = 连最后一条也全部塞进工具描述（messages 用占位符顶住）
     // 'system_only'          = 只把 system 消息塞进工具描述，保留聊天记录
@@ -18,24 +21,43 @@
     // 工具名称（只允许字母、数字、下划线）
     toolName: 'context_preset',
 
-    // 是否禁止模型主动调用该工具（如中转/模型报 400 不支持 tool_choice，保持 false）
+    // 是否禁止模型主动调用该工具（附加 tool_choice: 'none'）
     disableToolCall: false,
 
-    // 手机端：每次发请求时是否弹出 toastr 简短提示
+    // 是否记录日志（关闭后不记录、不输出日志）
+    enableLog: true,
+
+    // 是否弹出顶部 toastr 简短提示
     showToast: true,
 
-    // 手机端：是否显示右下角悬浮「工具日志」按钮（调通后可改为 false 隐藏）
-    showMobilePanel: true,
-
-    // 悬浮面板最多保留几条历史日志
+    // 最多保留几条历史日志
     maxLogs: 20,
   };
 
-  const CONFIG = Object.assign({}, DEFAULT_CONFIG, globalThis.CTX2TOOL_CONFIG || {});
-  const logs = [];
-  const parentDoc = window.parent?.document || document;
+  const parentWin = window.parent || window;
+  const parentDoc = parentWin.document || document;
+  const storage = parentWin.localStorage || localStorage;
 
-  // 防止重复注册监听器（例如手动重载脚本时）
+  function loadConfig() {
+    let saved = {};
+    try {
+      const raw = storage.getItem(STORAGE_KEY);
+      if (raw) saved = JSON.parse(raw);
+    } catch (_) {}
+    return Object.assign({}, DEFAULT_CONFIG, globalThis.CTX2TOOL_CONFIG || {}, saved);
+  }
+
+  function saveConfig(cfg) {
+    try {
+      storage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+    } catch (_) {}
+  }
+
+  let CONFIG = loadConfig();
+  const logs = [];
+  let activeTab = 'settings'; // 'settings' | 'logs'
+
+  // 防止重复注册监听器与重复创建 UI
   if (typeof globalThis.__ctx2toolCleanup === 'function') {
     try {
       globalThis.__ctx2toolCleanup();
@@ -43,6 +65,7 @@
   }
 
   function addLog(level, summary, detail = '') {
+    if (!CONFIG.enableLog && level !== 'ERR') return;
     const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
     logs.unshift({ time, level, summary, detail });
     if (logs.length > CONFIG.maxLogs) logs.pop();
@@ -51,82 +74,31 @@
     renderLogList();
   }
 
-  function initMobilePanel() {
-    parentDoc.getElementById('ctx2tool-log-btn')?.remove();
-    parentDoc.getElementById('ctx2tool-log-panel')?.remove();
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
 
-    if (!CONFIG.showMobilePanel) return;
-
-    const btn = parentDoc.createElement('button');
-    btn.id = 'ctx2tool-log-btn';
-    btn.textContent = '工具日志';
-    Object.assign(btn.style, {
-      position: 'fixed',
-      right: '12px',
-      bottom: '80px',
-      zIndex: '99999',
-      padding: '6px 10px',
-      fontSize: '12px',
-      color: '#fff',
-      background: 'rgba(30, 30, 30, 0.78)',
-      border: '1px solid rgba(255, 255, 255, 0.25)',
-      borderRadius: '16px',
-      backdropFilter: 'blur(4px)',
-      cursor: 'pointer',
-    });
-
-    const panel = parentDoc.createElement('div');
-    panel.id = 'ctx2tool-log-panel';
-    Object.assign(panel.style, {
-      display: 'none',
-      position: 'fixed',
-      left: '4vw',
-      right: '4vw',
-      bottom: '125px',
-      maxHeight: '60vh',
-      zIndex: '99999',
-      background: 'rgba(20, 20, 24, 0.95)',
-      color: '#eaeaea',
-      border: '1px solid rgba(255, 255, 255, 0.2)',
-      borderRadius: '10px',
-      padding: '10px',
-      fontSize: '12px',
-      overflowY: 'auto',
-      boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
-      wordBreak: 'break-all',
-    });
-
-    panel.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.15);">
-        <strong>ContextToTool v${VERSION}</strong>
-        <div>
-          <button id="ctx2tool-clear" style="margin-right:6px;padding:2px 8px;font-size:12px;">清空</button>
-          <button id="ctx2tool-close" style="padding:2px 8px;font-size:12px;">关闭</button>
-        </div>
-      </div>
-      <div id="ctx2tool-log-list" style="white-space:pre-wrap;line-height:1.45;"></div>
-    `;
-
-    btn.onclick = () => {
-      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-      renderLogList();
-    };
-
-    parentDoc.body.appendChild(btn);
-    parentDoc.body.appendChild(panel);
-
-    parentDoc.getElementById('ctx2tool-clear').onclick = () => {
-      logs.length = 0;
-      renderLogList();
-    };
-    parentDoc.getElementById('ctx2tool-close').onclick = () => {
-      panel.style.display = 'none';
-    };
+  function updateFloatButtonStyle() {
+    const btn = parentDoc.getElementById('ctx2tool-float-btn');
+    if (!btn) return;
+    btn.textContent = CONFIG.enabled ? '⚙ 工具:开' : '⚙ 工具:关';
+    btn.style.borderColor = CONFIG.enabled
+      ? 'rgba(122, 229, 130, 0.55)'
+      : 'rgba(255, 107, 107, 0.55)';
   }
 
   function renderLogList() {
     const listEl = parentDoc.getElementById('ctx2tool-log-list');
     if (!listEl) return;
+
+    if (!CONFIG.enableLog && logs.length === 0) {
+      listEl.textContent = '日志记录已关闭（可在「设置」中开启）。';
+      return;
+    }
 
     if (logs.length === 0) {
       listEl.textContent = '暂无日志，发送一条消息后会显示在这里。';
@@ -137,25 +109,235 @@
       .map((item) => {
         const color =
           item.level === 'ERR' ? '#ff6b6b' : item.level === 'WARN' ? '#ffd166' : '#7ae582';
-        const escapedDetail = item.detail
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;');
+        const detailHtml = item.detail
+          ? `<details style="margin-top:4px;"><summary style="color:#9ec5fe;cursor:pointer;">展开详情</summary><div style="margin-top:4px;color:#ccc;white-space:pre-wrap;">${escapeHtml(item.detail)}</div></details>`
+          : '';
         return `
           <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed rgba(255,255,255,0.12);">
-            <div><span style="color:${color};font-weight:bold;">[${item.time} ${item.level}]</span> ${item.summary}</div>
-            ${
-              escapedDetail
-                ? `<details style="margin-top:4px;"><summary style="color:#9ec5fe;">展开详情</summary><div style="margin-top:4px;color:#ccc;">${escapedDetail}</div></details>`
-                : ''
-            }
+            <div><span style="color:${color};font-weight:bold;">[${item.time} ${item.level}]</span> ${escapeHtml(item.summary)}</div>
+            ${detailHtml}
           </div>
         `;
       })
       .join('');
   }
 
+  function syncSettingsUI() {
+    const enabledEl = parentDoc.getElementById('ctx2tool-cfg-enabled');
+    const modeEl = parentDoc.getElementById('ctx2tool-cfg-mode');
+    const placeholderWrap = parentDoc.getElementById('ctx2tool-placeholder-wrap');
+    const placeholderEl = parentDoc.getElementById('ctx2tool-cfg-placeholder');
+    const toolNameEl = parentDoc.getElementById('ctx2tool-cfg-toolname');
+    const disableCallEl = parentDoc.getElementById('ctx2tool-cfg-disablecall');
+    const enableLogEl = parentDoc.getElementById('ctx2tool-cfg-enablelog');
+    const showToastEl = parentDoc.getElementById('ctx2tool-cfg-showtoast');
+
+    if (!enabledEl) return;
+    enabledEl.checked = !!CONFIG.enabled;
+    modeEl.value = CONFIG.mode;
+    placeholderEl.value = CONFIG.placeholderText;
+    placeholderWrap.style.display = CONFIG.mode === 'all_with_placeholder' ? 'block' : 'none';
+    toolNameEl.value = CONFIG.toolName;
+    disableCallEl.checked = !!CONFIG.disableToolCall;
+    enableLogEl.checked = !!CONFIG.enableLog;
+    showToastEl.checked = !!CONFIG.showToast;
+    updateFloatButtonStyle();
+  }
+
+  function switchTab(tab) {
+    activeTab = tab;
+    const settingsBody = parentDoc.getElementById('ctx2tool-tab-settings');
+    const logsBody = parentDoc.getElementById('ctx2tool-tab-logs');
+    const btnSettings = parentDoc.getElementById('ctx2tool-tabbtn-settings');
+    const btnLogs = parentDoc.getElementById('ctx2tool-tabbtn-logs');
+    if (!settingsBody || !logsBody) return;
+
+    const isSettings = tab === 'settings';
+    settingsBody.style.display = isSettings ? 'block' : 'none';
+    logsBody.style.display = isSettings ? 'none' : 'block';
+    btnSettings.style.background = isSettings ? 'rgba(158,197,254,0.25)' : 'transparent';
+    btnLogs.style.background = !isSettings ? 'rgba(158,197,254,0.25)' : 'transparent';
+
+    if (!isSettings) renderLogList();
+  }
+
+  function initUI() {
+    parentDoc.getElementById('ctx2tool-float-btn')?.remove();
+    parentDoc.getElementById('ctx2tool-panel')?.remove();
+
+    const btn = parentDoc.createElement('button');
+    btn.id = 'ctx2tool-float-btn';
+    Object.assign(btn.style, {
+      position: 'fixed',
+      right: '12px',
+      bottom: '80px',
+      zIndex: '99999',
+      padding: '6px 10px',
+      fontSize: '12px',
+      color: '#fff',
+      background: 'rgba(26, 26, 30, 0.82)',
+      border: '1px solid rgba(255, 255, 255, 0.28)',
+      borderRadius: '16px',
+      backdropFilter: 'blur(4px)',
+      cursor: 'pointer',
+      touchAction: 'manipulation',
+    });
+
+    const panel = parentDoc.createElement('div');
+    panel.id = 'ctx2tool-panel';
+    Object.assign(panel.style, {
+      display: 'none',
+      position: 'fixed',
+      left: '4vw',
+      right: '4vw',
+      bottom: '125px',
+      maxHeight: '68vh',
+      zIndex: '99999',
+      background: 'rgba(20, 20, 24, 0.96)',
+      color: '#eaeaea',
+      border: '1px solid rgba(255, 255, 255, 0.2)',
+      borderRadius: '12px',
+      padding: '12px',
+      fontSize: '13px',
+      overflowY: 'auto',
+      boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+      wordBreak: 'break-all',
+    });
+
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.14);">
+        <strong>ContextToTool v${VERSION}</strong>
+        <button id="ctx2tool-close" style="padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;">关闭</button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button id="ctx2tool-tabbtn-settings" style="flex:1;padding:6px;font-size:13px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);color:#fff;cursor:pointer;">配置面板</button>
+        <button id="ctx2tool-tabbtn-logs" style="flex:1;padding:6px;font-size:13px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);color:#fff;cursor:pointer;">运行日志</button>
+      </div>
+
+      <div id="ctx2tool-tab-settings" style="line-height:1.6;">
+        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span>启用上下文转工具描述</span>
+          <input id="ctx2tool-cfg-enabled" type="checkbox" style="width:18px;height:18px;" />
+        </label>
+
+        <div style="margin-bottom:10px;">
+          <div style="margin-bottom:4px;">打包模式</div>
+          <select id="ctx2tool-cfg-mode" style="width:100%;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);">
+            <option value="all">all（除最后一条外全部打包）</option>
+            <option value="all_with_placeholder">all_with_placeholder（全部打包 + 占位消息）</option>
+            <option value="system_only">system_only（仅打包 system，保留聊天记录）</option>
+          </select>
+        </div>
+
+        <div id="ctx2tool-placeholder-wrap" style="margin-bottom:10px;">
+          <div style="margin-bottom:4px;">占位消息内容（messages 留底）</div>
+          <input id="ctx2tool-cfg-placeholder" type="text" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);" />
+        </div>
+
+        <div style="margin-bottom:10px;">
+          <div style="margin-bottom:4px;">工具名称（仅字母/数字/下划线）</div>
+          <input id="ctx2tool-cfg-toolname" type="text" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);" />
+        </div>
+
+        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span>附加 tool_choice: none（禁调用）</span>
+          <input id="ctx2tool-cfg-disablecall" type="checkbox" style="width:18px;height:18px;" />
+        </label>
+
+        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span>开启日志记录</span>
+          <input id="ctx2tool-cfg-enablelog" type="checkbox" style="width:18px;height:18px;" />
+        </label>
+
+        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <span>开启顶部弹窗提示（Toast）</span>
+          <input id="ctx2tool-cfg-showtoast" type="checkbox" style="width:18px;height:18px;" />
+        </label>
+
+        <div style="display:flex;gap:8px;">
+          <button id="ctx2tool-save" style="flex:1;padding:7px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:bold;">保存配置</button>
+          <button id="ctx2tool-reset" style="padding:7px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.25);background:transparent;color:#ddd;">恢复默认</button>
+        </div>
+      </div>
+
+      <div id="ctx2tool-tab-logs" style="display:none;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+          <button id="ctx2tool-clear-logs" style="padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;">清空日志</button>
+        </div>
+        <div id="ctx2tool-log-list" style="white-space:pre-wrap;line-height:1.45;font-size:12px;"></div>
+      </div>
+    `;
+
+    btn.onclick = () => {
+      const opening = panel.style.display === 'none';
+      panel.style.display = opening ? 'block' : 'none';
+      if (opening) {
+        syncSettingsUI();
+        switchTab(activeTab);
+      }
+    };
+
+    parentDoc.body.appendChild(btn);
+    parentDoc.body.appendChild(panel);
+
+    parentDoc.getElementById('ctx2tool-close').onclick = () => {
+      panel.style.display = 'none';
+    };
+    parentDoc.getElementById('ctx2tool-tabbtn-settings').onclick = () => switchTab('settings');
+    parentDoc.getElementById('ctx2tool-tabbtn-logs').onclick = () => switchTab('logs');
+    parentDoc.getElementById('ctx2tool-clear-logs').onclick = () => {
+      logs.length = 0;
+      renderLogList();
+    };
+
+    parentDoc.getElementById('ctx2tool-cfg-mode').onchange = (e) => {
+      const wrap = parentDoc.getElementById('ctx2tool-placeholder-wrap');
+      if (wrap) wrap.style.display = e.target.value === 'all_with_placeholder' ? 'block' : 'none';
+    };
+
+    parentDoc.getElementById('ctx2tool-save').onclick = () => {
+      const rawName = (parentDoc.getElementById('ctx2tool-cfg-toolname').value || '').trim();
+      const safeToolName = rawName.replace(/[^a-zA-Z0-9_-]/g, '') || DEFAULT_CONFIG.toolName;
+      const rawPlaceholder = parentDoc.getElementById('ctx2tool-cfg-placeholder').value;
+
+      CONFIG = Object.assign({}, CONFIG, {
+        enabled: parentDoc.getElementById('ctx2tool-cfg-enabled').checked,
+        mode: parentDoc.getElementById('ctx2tool-cfg-mode').value,
+        placeholderText: rawPlaceholder || DEFAULT_CONFIG.placeholderText,
+        toolName: safeToolName,
+        disableToolCall: parentDoc.getElementById('ctx2tool-cfg-disablecall').checked,
+        enableLog: parentDoc.getElementById('ctx2tool-cfg-enablelog').checked,
+        showToast: parentDoc.getElementById('ctx2tool-cfg-showtoast').checked,
+      });
+
+      saveConfig(CONFIG);
+      syncSettingsUI();
+      addLog('OK', `配置已保存（启用:${CONFIG.enabled ? '是' : '否'} | 模式:${CONFIG.mode} | 日志:${CONFIG.enableLog ? '开' : '关'}）`);
+      if (typeof toastr !== 'undefined') {
+        toastr.success('配置已保存并生效', `ContextToTool v${VERSION}`);
+      }
+    };
+
+    parentDoc.getElementById('ctx2tool-reset').onclick = () => {
+      try {
+        storage.removeItem(STORAGE_KEY);
+      } catch (_) {}
+      CONFIG = Object.assign({}, DEFAULT_CONFIG);
+      syncSettingsUI();
+      addLog('OK', '已恢复默认配置');
+      if (typeof toastr !== 'undefined') {
+        toastr.info('已恢复默认配置', `ContextToTool v${VERSION}`);
+      }
+    };
+
+    syncSettingsUI();
+    switchTab('settings');
+  }
+
   const handler = (data) => {
+    if (!CONFIG.enabled) return;
+
     try {
       if (!data || !Array.isArray(data.messages) || data.messages.length === 0) {
         addLog('WARN', '跳过：messages 为空');
@@ -236,7 +418,7 @@
       const detail =
         `版本: v${VERSION} | 模式: ${CONFIG.mode}\n` +
         `API来源: ${data.chat_completion_source ?? '未知'}\n` +
-        `工具数: ${data.tools.length}（tool_choice: ${data.tool_choice ?? '未设置'}）\n` +
+        `工具名: ${CONFIG.toolName} | 工具数: ${data.tools.length} | tool_choice: ${data.tool_choice ?? '未设置'}\n` +
         `保留的 messages:\n${JSON.stringify(remaining, null, 2)}\n\n` +
         `description 预览:\n${previewHead}${previewTail}`;
 
@@ -253,15 +435,15 @@
     }
   };
 
-  initMobilePanel();
+  initUI();
   eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
 
   globalThis.__ctx2toolCleanup = () => {
     if (typeof eventRemoveListener === 'function') {
       eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
     }
-    parentDoc.getElementById('ctx2tool-log-btn')?.remove();
-    parentDoc.getElementById('ctx2tool-log-panel')?.remove();
+    parentDoc.getElementById('ctx2tool-float-btn')?.remove();
+    parentDoc.getElementById('ctx2tool-panel')?.remove();
   };
 
   addLog('OK', `v${VERSION} 已加载（模式: ${CONFIG.mode}）`);
