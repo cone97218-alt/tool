@@ -3,17 +3,21 @@
 // 入口注入到酒馆「魔法棒菜单（#extensionsMenu）」，支持日间/夜间双主题一键切换
 
 (() => {
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
 
   const DEFAULT_CONFIG = {
     // 总开关：关闭后不拦截、不修改任何请求
     enabled: true,
 
-    // 'all_with_placeholder' = 连最后一条也全部塞进工具描述（messages 留空消息或自定义占位）
-    // 'all'                  = 除最后一条外全部塞进工具描述（最后一条留在 messages）
+    // 'all_with_placeholder' = 全部塞进工具描述，messages 发自定义留底消息（可选身份和内容）
+    // 'all'                  = 除最后一条外全部塞进工具描述，原最后一条留在 messages（身份跟随预设）
+    // 'all_copy_last'        = 全部塞进工具描述，同时把原最后一条留底在 messages（身份跟随预设）
     // 'system_only'          = 只把 system 消息塞进工具描述，保留聊天记录
     mode: 'all_with_placeholder',
+
+    // mode 为 'all_with_placeholder' 时留底消息的身份：'user' | 'system' | 'assistant'
+    placeholderRole: 'user',
 
     // mode 为 'all_with_placeholder' 时填入 messages 的内容（支持留空 ""、空格或自定义文本）
     placeholderText: '',
@@ -446,6 +450,7 @@
     const enabledEl = parentDoc.getElementById('ctx2tool-cfg-enabled');
     const modeEl = parentDoc.getElementById('ctx2tool-cfg-mode');
     const placeholderWrap = parentDoc.getElementById('ctx2tool-placeholder-wrap');
+    const placeholderRoleEl = parentDoc.getElementById('ctx2tool-cfg-placeholder-role');
     const placeholderEl = parentDoc.getElementById('ctx2tool-cfg-placeholder');
     const toolNameEl = parentDoc.getElementById('ctx2tool-cfg-toolname');
     const disableCallEl = parentDoc.getElementById('ctx2tool-cfg-disablecall');
@@ -455,6 +460,7 @@
     if (!enabledEl) return;
     enabledEl.checked = !!CONFIG.enabled;
     modeEl.value = CONFIG.mode;
+    placeholderRoleEl.value = CONFIG.placeholderRole || 'user';
     placeholderEl.value = CONFIG.placeholderText;
     placeholderWrap.style.display = CONFIG.mode === 'all_with_placeholder' ? 'block' : 'none';
     toolNameEl.value = CONFIG.toolName;
@@ -558,17 +564,29 @@
         </div>
 
         <div class="c2t-field" style="margin-top:8px;">
-          <label class="c2t-label" for="ctx2tool-cfg-mode">打包模式</label>
+          <label class="c2t-label" for="ctx2tool-cfg-mode">打包模式与留底消息</label>
           <select id="ctx2tool-cfg-mode" class="c2t-select">
-            <option value="all_with_placeholder">all_with_placeholder（全部打包 + 留底消息）</option>
-            <option value="all">all（除最后一条外全部打包）</option>
-            <option value="system_only">system_only（仅打包 system，保留聊天记录）</option>
+            <option value="all_with_placeholder">全部打包 + 自定义留底消息</option>
+            <option value="all">除最后一条外全部打包（原最后一条留底，身份跟随预设）</option>
+            <option value="all_copy_last">全部打包 + 原最后一条留底（身份跟随预设）</option>
+            <option value="system_only">仅打包 system，保留聊天记录</option>
           </select>
         </div>
 
-        <div id="ctx2tool-placeholder-wrap" class="c2t-field">
-          <label class="c2t-label" for="ctx2tool-cfg-placeholder">messages 留底内容（留空即空消息，或填引导词）</label>
-          <input id="ctx2tool-cfg-placeholder" class="c2t-input" type="text" placeholder="留空即空消息 &quot;&quot;，或填如：请使用工具" />
+        <div id="ctx2tool-placeholder-wrap">
+          <div class="c2t-field">
+            <label class="c2t-label" for="ctx2tool-cfg-placeholder-role">留底消息身份（role）</label>
+            <select id="ctx2tool-cfg-placeholder-role" class="c2t-select">
+              <option value="user">user（默认，兼容性最好）</option>
+              <option value="system">system</option>
+              <option value="assistant">assistant</option>
+            </select>
+          </div>
+
+          <div class="c2t-field">
+            <label class="c2t-label" for="ctx2tool-cfg-placeholder">留底消息内容（留空即空消息，或填引导词）</label>
+            <input id="ctx2tool-cfg-placeholder" class="c2t-input" type="text" placeholder="留空即空消息 &quot;&quot;，或填如：请使用工具" />
+          </div>
         </div>
 
         <div class="c2t-field">
@@ -644,6 +662,7 @@
       CONFIG = Object.assign({}, CONFIG, {
         enabled: parentDoc.getElementById('ctx2tool-cfg-enabled').checked,
         mode: parentDoc.getElementById('ctx2tool-cfg-mode').value,
+        placeholderRole: parentDoc.getElementById('ctx2tool-cfg-placeholder-role').value || 'user',
         placeholderText: rawPlaceholder,
         toolName: safeToolName,
         disableToolCall: parentDoc.getElementById('ctx2tool-cfg-disablecall').checked,
@@ -704,7 +723,10 @@
         }
       } else if (CONFIG.mode === 'all_with_placeholder') {
         toPack = [...data.messages];
-        remaining = [{ role: 'user', content: CONFIG.placeholderText }];
+        remaining = [{ role: CONFIG.placeholderRole || 'user', content: CONFIG.placeholderText }];
+      } else if (CONFIG.mode === 'all_copy_last') {
+        toPack = [...data.messages];
+        remaining = [data.messages[data.messages.length - 1]];
       } else {
         if (data.messages.length <= 1) {
           addLog('WARN', '跳过：messages 只有 1 条，未打包');
