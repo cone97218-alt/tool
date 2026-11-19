@@ -1,9 +1,9 @@
 // SillyTavern (TavernHelper / JS-Slash-Runner) 远程全局脚本
 // 功能：在 Chat Completion 请求发出前，将上下文/预设打包塞入 tools[i].function.description
-// 内置手机端可视化配置面板 + 日志查看器（配置自动保存在浏览器 localStorage）
+// 入口注入到酒馆「魔法棒菜单（#extensionsMenu）」，不常态占用屏幕
 
 (() => {
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
 
   const DEFAULT_CONFIG = {
@@ -56,6 +56,7 @@
   let CONFIG = loadConfig();
   const logs = [];
   let activeTab = 'settings'; // 'settings' | 'logs'
+  let injectTimer = null;
 
   // 防止重复注册监听器与重复创建 UI
   if (typeof globalThis.__ctx2toolCleanup === 'function') {
@@ -82,13 +83,25 @@
       .replace(/"/g, '&quot;');
   }
 
-  function updateFloatButtonStyle() {
-    const btn = parentDoc.getElementById('ctx2tool-float-btn');
-    if (!btn) return;
-    btn.textContent = CONFIG.enabled ? '⚙ 工具:开' : '⚙ 工具:关';
-    btn.style.borderColor = CONFIG.enabled
-      ? 'rgba(122, 229, 130, 0.55)'
-      : 'rgba(255, 107, 107, 0.55)';
+  function updateWandLabel() {
+    const label = parentDoc.getElementById('ctx2tool-wand-label');
+    if (label) {
+      label.textContent = CONFIG.enabled ? '上下文转工具 (开)' : '上下文转工具 (关)';
+    }
+  }
+
+  function openPanel() {
+    const backdrop = parentDoc.getElementById('ctx2tool-backdrop');
+    const panel = parentDoc.getElementById('ctx2tool-panel');
+    if (!backdrop || !panel) return;
+    syncSettingsUI();
+    switchTab(activeTab);
+    backdrop.style.display = 'flex';
+  }
+
+  function closePanel() {
+    const backdrop = parentDoc.getElementById('ctx2tool-backdrop');
+    if (backdrop) backdrop.style.display = 'none';
   }
 
   function renderLogList() {
@@ -96,7 +109,7 @@
     if (!listEl) return;
 
     if (!CONFIG.enableLog && logs.length === 0) {
-      listEl.textContent = '日志记录已关闭（可在「设置」中开启）。';
+      listEl.textContent = '日志记录已关闭（可在「配置面板」中开启）。';
       return;
     }
 
@@ -141,7 +154,7 @@
     disableCallEl.checked = !!CONFIG.disableToolCall;
     enableLogEl.checked = !!CONFIG.enableLog;
     showToastEl.checked = !!CONFIG.showToast;
-    updateFloatButtonStyle();
+    updateWandLabel();
   }
 
   function switchTab(tab) {
@@ -161,53 +174,85 @@
     if (!isSettings) renderLogList();
   }
 
+  function injectWandMenuItem(retry = 0) {
+    parentDoc.getElementById('ctx2tool-wand-item')?.remove();
+
+    const menu = parentDoc.getElementById('extensionsMenu');
+    if (!menu) {
+      if (retry < 30) {
+        injectTimer = setTimeout(() => injectWandMenuItem(retry + 1), 300);
+      }
+      return;
+    }
+
+    const item = parentDoc.createElement('div');
+    item.id = 'ctx2tool-wand-item';
+    item.className = 'list-group-item flex-container flexGap5';
+    item.style.cursor = 'pointer';
+    item.innerHTML = `
+      <div class="fa-solid fa-wrench extensionsMenuExtensionButton"></div>
+      <span id="ctx2tool-wand-label"></span>
+    `;
+
+    item.onclick = (e) => {
+      e.stopPropagation();
+      // 点击后自动收起魔法棒菜单
+      menu.style.display = 'none';
+      openPanel();
+    };
+
+    menu.appendChild(item);
+    updateWandLabel();
+  }
+
   function initUI() {
+    // 清理旧版悬浮按钮与面板
     parentDoc.getElementById('ctx2tool-float-btn')?.remove();
+    parentDoc.getElementById('ctx2tool-log-btn')?.remove();
+    parentDoc.getElementById('ctx2tool-log-panel')?.remove();
+    parentDoc.getElementById('ctx2tool-backdrop')?.remove();
     parentDoc.getElementById('ctx2tool-panel')?.remove();
 
-    const btn = parentDoc.createElement('button');
-    btn.id = 'ctx2tool-float-btn';
-    Object.assign(btn.style, {
+    // 遮罩层（点空白处关闭）
+    const backdrop = parentDoc.createElement('div');
+    backdrop.id = 'ctx2tool-backdrop';
+    Object.assign(backdrop.style, {
+      display: 'none',
       position: 'fixed',
-      right: '12px',
-      bottom: '80px',
+      inset: '0',
       zIndex: '99999',
-      padding: '6px 10px',
-      fontSize: '12px',
-      color: '#fff',
-      background: 'rgba(26, 26, 30, 0.82)',
-      border: '1px solid rgba(255, 255, 255, 0.28)',
-      borderRadius: '16px',
-      backdropFilter: 'blur(4px)',
-      cursor: 'pointer',
-      touchAction: 'manipulation',
+      background: 'rgba(0, 0, 0, 0.55)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '16px',
+      boxSizing: 'border-box',
     });
+
+    backdrop.onclick = (e) => {
+      if (e.target === backdrop) closePanel();
+    };
 
     const panel = parentDoc.createElement('div');
     panel.id = 'ctx2tool-panel';
     Object.assign(panel.style, {
-      display: 'none',
-      position: 'fixed',
-      left: '4vw',
-      right: '4vw',
-      bottom: '125px',
-      maxHeight: '68vh',
-      zIndex: '99999',
-      background: 'rgba(20, 20, 24, 0.96)',
+      width: '100%',
+      maxWidth: '460px',
+      maxHeight: '80vh',
+      background: 'rgba(20, 20, 24, 0.97)',
       color: '#eaeaea',
       border: '1px solid rgba(255, 255, 255, 0.2)',
       borderRadius: '12px',
-      padding: '12px',
+      padding: '14px',
       fontSize: '13px',
       overflowY: 'auto',
-      boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+      boxShadow: '0 8px 28px rgba(0,0,0,0.6)',
       wordBreak: 'break-all',
     });
 
     panel.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.14);">
         <strong>ContextToTool v${VERSION}</strong>
-        <button id="ctx2tool-close" style="padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;">关闭</button>
+        <button id="ctx2tool-close" style="padding:4px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;cursor:pointer;">关闭</button>
       </div>
 
       <div style="display:flex;gap:8px;margin-bottom:12px;">
@@ -256,34 +301,23 @@
         </label>
 
         <div style="display:flex;gap:8px;">
-          <button id="ctx2tool-save" style="flex:1;padding:7px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:bold;">保存配置</button>
-          <button id="ctx2tool-reset" style="padding:7px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.25);background:transparent;color:#ddd;">恢复默认</button>
+          <button id="ctx2tool-save" style="flex:1;padding:8px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:bold;cursor:pointer;">保存配置</button>
+          <button id="ctx2tool-reset" style="padding:8px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.25);background:transparent;color:#ddd;cursor:pointer;">恢复默认</button>
         </div>
       </div>
 
       <div id="ctx2tool-tab-logs" style="display:none;">
         <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-          <button id="ctx2tool-clear-logs" style="padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;">清空日志</button>
+          <button id="ctx2tool-clear-logs" style="padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;cursor:pointer;">清空日志</button>
         </div>
         <div id="ctx2tool-log-list" style="white-space:pre-wrap;line-height:1.45;font-size:12px;"></div>
       </div>
     `;
 
-    btn.onclick = () => {
-      const opening = panel.style.display === 'none';
-      panel.style.display = opening ? 'block' : 'none';
-      if (opening) {
-        syncSettingsUI();
-        switchTab(activeTab);
-      }
-    };
+    backdrop.appendChild(panel);
+    parentDoc.body.appendChild(backdrop);
 
-    parentDoc.body.appendChild(btn);
-    parentDoc.body.appendChild(panel);
-
-    parentDoc.getElementById('ctx2tool-close').onclick = () => {
-      panel.style.display = 'none';
-    };
+    parentDoc.getElementById('ctx2tool-close').onclick = closePanel;
     parentDoc.getElementById('ctx2tool-tabbtn-settings').onclick = () => switchTab('settings');
     parentDoc.getElementById('ctx2tool-tabbtn-logs').onclick = () => switchTab('logs');
     parentDoc.getElementById('ctx2tool-clear-logs').onclick = () => {
@@ -313,7 +347,10 @@
 
       saveConfig(CONFIG);
       syncSettingsUI();
-      addLog('OK', `配置已保存（启用:${CONFIG.enabled ? '是' : '否'} | 模式:${CONFIG.mode} | 日志:${CONFIG.enableLog ? '开' : '关'}）`);
+      addLog(
+        'OK',
+        `配置已保存（启用:${CONFIG.enabled ? '是' : '否'} | 模式:${CONFIG.mode} | 日志:${CONFIG.enableLog ? '开' : '关'}）`,
+      );
       if (typeof toastr !== 'undefined') {
         toastr.success('配置已保存并生效', `ContextToTool v${VERSION}`);
       }
@@ -331,6 +368,7 @@
       }
     };
 
+    injectWandMenuItem();
     syncSettingsUI();
     switchTab('settings');
   }
@@ -439,15 +477,18 @@
   eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
 
   globalThis.__ctx2toolCleanup = () => {
+    if (injectTimer) clearTimeout(injectTimer);
     if (typeof eventRemoveListener === 'function') {
       eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
     }
+    parentDoc.getElementById('ctx2tool-wand-item')?.remove();
     parentDoc.getElementById('ctx2tool-float-btn')?.remove();
+    parentDoc.getElementById('ctx2tool-backdrop')?.remove();
     parentDoc.getElementById('ctx2tool-panel')?.remove();
   };
 
   addLog('OK', `v${VERSION} 已加载（模式: ${CONFIG.mode}）`);
   if (CONFIG.showToast && typeof toastr !== 'undefined') {
-    toastr.success(`v${VERSION} 已加载（模式: ${CONFIG.mode}）`, 'ContextToTool');
+    toastr.success(`v${VERSION} 已加载（点击魔法棒菜单打开配置）`, 'ContextToTool');
   }
 })();
