@@ -1,9 +1,9 @@
 // SillyTavern (TavernHelper / JS-Slash-Runner) 远程全局脚本
 // 功能：在 Chat Completion 请求发出前，将上下文/预设打包塞入 tools[i].function.description
-// 入口注入到酒馆「魔法棒菜单（#extensionsMenu）」，不常态占用屏幕
+// 入口注入到酒馆「魔法棒菜单（#extensionsMenu）」，支持日间/夜间双主题一键切换
 
 (() => {
-  const VERSION = '1.2.1';
+  const VERSION = '1.3.0';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
 
   const DEFAULT_CONFIG = {
@@ -30,9 +30,21 @@
     // 是否弹出顶部 toastr 简短提示
     showToast: true,
 
+    // 面板主题：'dark' | 'light'
+    theme: 'dark',
+
     // 最多保留几条历史日志
     maxLogs: 20,
   };
+
+  const ICON_SUN =
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>';
+
+  const ICON_MOON =
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>';
+
+  const ICON_CLOSE =
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 
   const parentWin = window.parent || window;
   const parentDoc = parentWin.document || document;
@@ -83,6 +95,298 @@
       .replace(/"/g, '&quot;');
   }
 
+  function injectStyles() {
+    parentDoc.getElementById('ctx2tool-style')?.remove();
+    const style = parentDoc.createElement('style');
+    style.id = 'ctx2tool-style';
+    style.textContent = `
+      #ctx2tool-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        background: rgba(0, 0, 0, 0.52);
+        backdrop-filter: blur(3px);
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        box-sizing: border-box;
+      }
+
+      #ctx2tool-panel {
+        --c2t-bg: #18191e;
+        --c2t-surface: #22242c;
+        --c2t-surface-hover: #2b2e38;
+        --c2t-text: #f1f3f5;
+        --c2t-muted: #9aa1ae;
+        --c2t-border: rgba(255, 255, 255, 0.12);
+        --c2t-accent: #3b82f6;
+        --c2t-accent-text: #ffffff;
+        --c2t-switch-off: #3a3e4c;
+        --c2t-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+        --c2t-ok: #4ade80;
+        --c2t-warn: #facc15;
+        --c2t-err: #f87171;
+        --c2t-link: #60a5fa;
+
+        width: 100%;
+        max-width: 440px;
+        max-height: 82vh;
+        background: var(--c2t-bg);
+        color: var(--c2t-text);
+        border: 1px solid var(--c2t-border);
+        border-radius: 16px;
+        padding: 16px;
+        font-size: 13px;
+        overflow-y: auto;
+        box-shadow: var(--c2t-shadow);
+        word-break: break-all;
+        box-sizing: border-box;
+        transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+      }
+
+      #ctx2tool-panel[data-theme="light"] {
+        --c2t-bg: #ffffff;
+        --c2t-surface: #f3f5f8;
+        --c2t-surface-hover: #e7ebf2;
+        --c2t-text: #1e293b;
+        --c2t-muted: #64748b;
+        --c2t-border: rgba(15, 23, 42, 0.12);
+        --c2t-accent: #2563eb;
+        --c2t-accent-text: #ffffff;
+        --c2t-switch-off: #cbd5e1;
+        --c2t-shadow: 0 12px 36px rgba(15, 23, 42, 0.18);
+        --c2t-ok: #16a34a;
+        --c2t-warn: #ca8a04;
+        --c2t-err: #dc2626;
+        --c2t-link: #2563eb;
+      }
+
+      #ctx2tool-panel .c2t-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--c2t-border);
+      }
+
+      #ctx2tool-panel .c2t-title {
+        font-size: 15px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      #ctx2tool-panel .c2t-ver {
+        font-size: 11px;
+        color: var(--c2t-muted);
+        background: var(--c2t-surface);
+        padding: 2px 6px;
+        border-radius: 999px;
+      }
+
+      #ctx2tool-panel .c2t-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      #ctx2tool-panel .c2t-icon-btn {
+        width: 32px;
+        height: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        border: 1px solid var(--c2t-border);
+        background: var(--c2t-surface);
+        color: var(--c2t-text);
+        cursor: pointer;
+        padding: 0;
+        transition: background 0.15s ease, transform 0.1s ease;
+      }
+
+      #ctx2tool-panel .c2t-icon-btn:active {
+        transform: scale(0.94);
+      }
+
+      #ctx2tool-panel .c2t-tabs {
+        display: flex;
+        gap: 6px;
+        background: var(--c2t-surface);
+        padding: 4px;
+        border-radius: 10px;
+        margin-bottom: 14px;
+      }
+
+      #ctx2tool-panel .c2t-tab-btn {
+        flex: 1;
+        padding: 7px 10px;
+        font-size: 13px;
+        font-weight: 500;
+        border: none;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--c2t-muted);
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      #ctx2tool-panel .c2t-tab-btn.active {
+        background: var(--c2t-bg);
+        color: var(--c2t-text);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+      }
+
+      #ctx2tool-panel .c2t-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        gap: 12px;
+      }
+
+      #ctx2tool-panel .c2t-field {
+        margin-bottom: 12px;
+      }
+
+      #ctx2tool-panel .c2t-label {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--c2t-muted);
+        font-size: 12px;
+      }
+
+      #ctx2tool-panel .c2t-input,
+      #ctx2tool-panel .c2t-select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: var(--c2t-surface);
+        color: var(--c2t-text);
+        border: 1px solid var(--c2t-border);
+        font-size: 13px;
+        outline: none;
+      }
+
+      #ctx2tool-panel .c2t-input:focus,
+      #ctx2tool-panel .c2t-select:focus {
+        border-color: var(--c2t-accent);
+      }
+
+      #ctx2tool-panel .c2t-switch {
+        position: relative;
+        display: inline-block;
+        width: 40px;
+        height: 22px;
+        flex-shrink: 0;
+      }
+
+      #ctx2tool-panel .c2t-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      #ctx2tool-panel .c2t-slider {
+        position: absolute;
+        inset: 0;
+        cursor: pointer;
+        background: var(--c2t-switch-off);
+        border-radius: 999px;
+        transition: background 0.2s ease;
+      }
+
+      #ctx2tool-panel .c2t-slider::before {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        left: 3px;
+        top: 3px;
+        background: #ffffff;
+        border-radius: 50%;
+        transition: transform 0.2s ease;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+      }
+
+      #ctx2tool-panel .c2t-switch input:checked + .c2t-slider {
+        background: var(--c2t-accent);
+      }
+
+      #ctx2tool-panel .c2t-switch input:checked + .c2t-slider::before {
+        transform: translateX(18px);
+      }
+
+      #ctx2tool-panel .c2t-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      #ctx2tool-panel .c2t-btn-primary {
+        flex: 1;
+        padding: 9px 12px;
+        border-radius: 9px;
+        border: none;
+        background: var(--c2t-accent);
+        color: var(--c2t-accent-text);
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      #ctx2tool-panel .c2t-btn-secondary {
+        padding: 9px 14px;
+        border-radius: 9px;
+        border: 1px solid var(--c2t-border);
+        background: var(--c2t-surface);
+        color: var(--c2t-text);
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      #ctx2tool-panel .c2t-log-item {
+        padding: 8px 10px;
+        margin-bottom: 8px;
+        border-radius: 8px;
+        background: var(--c2t-surface);
+        border: 1px solid var(--c2t-border);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      #ctx2tool-panel .c2t-log-detail {
+        margin-top: 6px;
+        padding-top: 6px;
+        border-top: 1px dashed var(--c2t-border);
+        color: var(--c2t-muted);
+        white-space: pre-wrap;
+      }
+
+      #ctx2tool-panel .c2t-empty {
+        text-align: center;
+        color: var(--c2t-muted);
+        padding: 24px 8px;
+      }
+    `;
+    parentDoc.head.appendChild(style);
+  }
+
+  function applyTheme(theme) {
+    const safeTheme = theme === 'light' ? 'light' : 'dark';
+    CONFIG.theme = safeTheme;
+    const panel = parentDoc.getElementById('ctx2tool-panel');
+    const themeBtn = parentDoc.getElementById('ctx2tool-theme-toggle');
+    if (panel) panel.setAttribute('data-theme', safeTheme);
+    if (themeBtn) {
+      themeBtn.innerHTML = safeTheme === 'dark' ? ICON_SUN : ICON_MOON;
+    }
+  }
+
   function updateWandLabel() {
     const label = parentDoc.getElementById('ctx2tool-wand-label');
     if (label) {
@@ -92,8 +396,7 @@
 
   function openPanel() {
     const backdrop = parentDoc.getElementById('ctx2tool-backdrop');
-    const panel = parentDoc.getElementById('ctx2tool-panel');
-    if (!backdrop || !panel) return;
+    if (!backdrop) return;
     syncSettingsUI();
     switchTab(activeTab);
     backdrop.style.display = 'flex';
@@ -109,25 +412,29 @@
     if (!listEl) return;
 
     if (!CONFIG.enableLog && logs.length === 0) {
-      listEl.textContent = '日志记录已关闭（可在「配置面板」中开启）。';
+      listEl.innerHTML = '<div class="c2t-empty">日志记录已关闭（可在「配置面板」中开启）</div>';
       return;
     }
 
     if (logs.length === 0) {
-      listEl.textContent = '暂无日志，发送一条消息后会显示在这里。';
+      listEl.innerHTML = '<div class="c2t-empty">暂无日志，发送一条消息后会显示在这里</div>';
       return;
     }
 
     listEl.innerHTML = logs
       .map((item) => {
-        const color =
-          item.level === 'ERR' ? '#ff6b6b' : item.level === 'WARN' ? '#ffd166' : '#7ae582';
+        const colorVar =
+          item.level === 'ERR'
+            ? 'var(--c2t-err)'
+            : item.level === 'WARN'
+              ? 'var(--c2t-warn)'
+              : 'var(--c2t-ok)';
         const detailHtml = item.detail
-          ? `<details style="margin-top:4px;"><summary style="color:#9ec5fe;cursor:pointer;">展开详情</summary><div style="margin-top:4px;color:#ccc;white-space:pre-wrap;">${escapeHtml(item.detail)}</div></details>`
+          ? `<details style="margin-top:4px;"><summary style="color:var(--c2t-link);cursor:pointer;">展开详情</summary><div class="c2t-log-detail">${escapeHtml(item.detail)}</div></details>`
           : '';
         return `
-          <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed rgba(255,255,255,0.12);">
-            <div><span style="color:${color};font-weight:bold;">[${item.time} ${item.level}]</span> ${escapeHtml(item.summary)}</div>
+          <div class="c2t-log-item">
+            <div><span style="color:${colorVar};font-weight:600;">[${item.time} ${item.level}]</span> ${escapeHtml(item.summary)}</div>
             ${detailHtml}
           </div>
         `;
@@ -154,6 +461,7 @@
     disableCallEl.checked = !!CONFIG.disableToolCall;
     enableLogEl.checked = !!CONFIG.enableLog;
     showToastEl.checked = !!CONFIG.showToast;
+    applyTheme(CONFIG.theme);
     updateWandLabel();
   }
 
@@ -168,8 +476,8 @@
     const isSettings = tab === 'settings';
     settingsBody.style.display = isSettings ? 'block' : 'none';
     logsBody.style.display = isSettings ? 'none' : 'block';
-    btnSettings.style.background = isSettings ? 'rgba(158,197,254,0.25)' : 'transparent';
-    btnLogs.style.background = !isSettings ? 'rgba(158,197,254,0.25)' : 'transparent';
+    btnSettings.classList.toggle('active', isSettings);
+    btnLogs.classList.toggle('active', !isSettings);
 
     if (!isSettings) renderLogList();
   }
@@ -196,7 +504,6 @@
 
     item.onclick = (e) => {
       e.stopPropagation();
-      // 点击后自动收起魔法棒菜单
       menu.style.display = 'none';
       openPanel();
     };
@@ -206,111 +513,104 @@
   }
 
   function initUI() {
-    // 清理旧版悬浮按钮与面板
     parentDoc.getElementById('ctx2tool-float-btn')?.remove();
     parentDoc.getElementById('ctx2tool-log-btn')?.remove();
     parentDoc.getElementById('ctx2tool-log-panel')?.remove();
     parentDoc.getElementById('ctx2tool-backdrop')?.remove();
     parentDoc.getElementById('ctx2tool-panel')?.remove();
 
-    // 遮罩层（点空白处关闭）
+    injectStyles();
+
     const backdrop = parentDoc.createElement('div');
     backdrop.id = 'ctx2tool-backdrop';
-    Object.assign(backdrop.style, {
-      display: 'none',
-      position: 'fixed',
-      inset: '0',
-      zIndex: '99999',
-      background: 'rgba(0, 0, 0, 0.55)',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '16px',
-      boxSizing: 'border-box',
-    });
-
     backdrop.onclick = (e) => {
       if (e.target === backdrop) closePanel();
     };
 
     const panel = parentDoc.createElement('div');
     panel.id = 'ctx2tool-panel';
-    Object.assign(panel.style, {
-      width: '100%',
-      maxWidth: '460px',
-      maxHeight: '80vh',
-      background: 'rgba(20, 20, 24, 0.97)',
-      color: '#eaeaea',
-      border: '1px solid rgba(255, 255, 255, 0.2)',
-      borderRadius: '12px',
-      padding: '14px',
-      fontSize: '13px',
-      overflowY: 'auto',
-      boxShadow: '0 8px 28px rgba(0,0,0,0.6)',
-      wordBreak: 'break-all',
-    });
+    panel.setAttribute('data-theme', CONFIG.theme === 'light' ? 'light' : 'dark');
 
     panel.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.14);">
-        <strong>ContextToTool v${VERSION}</strong>
-        <button id="ctx2tool-close" style="padding:4px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;cursor:pointer;">关闭</button>
+      <div class="c2t-header">
+        <div class="c2t-title">
+          <span>ContextToTool</span>
+          <span class="c2t-ver">v${VERSION}</span>
+        </div>
+        <div class="c2t-header-actions">
+          <button id="ctx2tool-theme-toggle" class="c2t-icon-btn" type="button"></button>
+          <button id="ctx2tool-close" class="c2t-icon-btn" type="button">${ICON_CLOSE}</button>
+        </div>
       </div>
 
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <button id="ctx2tool-tabbtn-settings" style="flex:1;padding:6px;font-size:13px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);color:#fff;cursor:pointer;">配置面板</button>
-        <button id="ctx2tool-tabbtn-logs" style="flex:1;padding:6px;font-size:13px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);color:#fff;cursor:pointer;">运行日志</button>
+      <div class="c2t-tabs">
+        <button id="ctx2tool-tabbtn-settings" class="c2t-tab-btn" type="button">配置面板</button>
+        <button id="ctx2tool-tabbtn-logs" class="c2t-tab-btn" type="button">运行日志</button>
       </div>
 
-      <div id="ctx2tool-tab-settings" style="line-height:1.6;">
-        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div id="ctx2tool-tab-settings">
+        <div class="c2t-row">
           <span>启用上下文转工具描述</span>
-          <input id="ctx2tool-cfg-enabled" type="checkbox" style="width:18px;height:18px;" />
-        </label>
+          <label class="c2t-switch">
+            <input id="ctx2tool-cfg-enabled" type="checkbox" />
+            <span class="c2t-slider"></span>
+          </label>
+        </div>
 
-        <div style="margin-bottom:10px;">
-          <div style="margin-bottom:4px;">打包模式</div>
-          <select id="ctx2tool-cfg-mode" style="width:100%;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);">
+        <div class="c2t-field" style="margin-top:8px;">
+          <label class="c2t-label" for="ctx2tool-cfg-mode">打包模式</label>
+          <select id="ctx2tool-cfg-mode" class="c2t-select">
+            <option value="all_with_placeholder">all_with_placeholder（全部打包 + 留底消息）</option>
             <option value="all">all（除最后一条外全部打包）</option>
-            <option value="all_with_placeholder">all_with_placeholder（全部打包 + 占位消息）</option>
             <option value="system_only">system_only（仅打包 system，保留聊天记录）</option>
           </select>
         </div>
 
-        <div id="ctx2tool-placeholder-wrap" style="margin-bottom:10px;">
-          <div style="margin-bottom:4px;">messages 留底内容（留空即发空消息，或填引导词）</div>
-          <input id="ctx2tool-cfg-placeholder" type="text" placeholder="留空即空消息 &quot;&quot;，或填如：请使用工具" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);" />
+        <div id="ctx2tool-placeholder-wrap" class="c2t-field">
+          <label class="c2t-label" for="ctx2tool-cfg-placeholder">messages 留底内容（留空即空消息，或填引导词）</label>
+          <input id="ctx2tool-cfg-placeholder" class="c2t-input" type="text" placeholder="留空即空消息 &quot;&quot;，或填如：请使用工具" />
         </div>
 
-        <div style="margin-bottom:10px;">
-          <div style="margin-bottom:4px;">工具名称（仅字母/数字/下划线）</div>
-          <input id="ctx2tool-cfg-toolname" type="text" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);" />
+        <div class="c2t-field">
+          <label class="c2t-label" for="ctx2tool-cfg-toolname">工具名称（仅字母/数字/下划线）</label>
+          <input id="ctx2tool-cfg-toolname" class="c2t-input" type="text" />
         </div>
 
-        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="c2t-row">
           <span>附加 tool_choice: none（禁调用）</span>
-          <input id="ctx2tool-cfg-disablecall" type="checkbox" style="width:18px;height:18px;" />
-        </label>
+          <label class="c2t-switch">
+            <input id="ctx2tool-cfg-disablecall" type="checkbox" />
+            <span class="c2t-slider"></span>
+          </label>
+        </div>
 
-        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="c2t-row">
           <span>开启日志记录</span>
-          <input id="ctx2tool-cfg-enablelog" type="checkbox" style="width:18px;height:18px;" />
-        </label>
+          <label class="c2t-switch">
+            <input id="ctx2tool-cfg-enablelog" type="checkbox" />
+            <span class="c2t-slider"></span>
+          </label>
+        </div>
 
-        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div class="c2t-row">
           <span>开启顶部弹窗提示（Toast）</span>
-          <input id="ctx2tool-cfg-showtoast" type="checkbox" style="width:18px;height:18px;" />
-        </label>
+          <label class="c2t-switch">
+            <input id="ctx2tool-cfg-showtoast" type="checkbox" />
+            <span class="c2t-slider"></span>
+          </label>
+        </div>
 
-        <div style="display:flex;gap:8px;">
-          <button id="ctx2tool-save" style="flex:1;padding:8px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:bold;cursor:pointer;">保存配置</button>
-          <button id="ctx2tool-reset" style="padding:8px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.25);background:transparent;color:#ddd;cursor:pointer;">恢复默认</button>
+        <div class="c2t-actions">
+          <button id="ctx2tool-save" class="c2t-btn-primary" type="button">保存配置</button>
+          <button id="ctx2tool-reset" class="c2t-btn-secondary" type="button">恢复默认</button>
         </div>
       </div>
 
       <div id="ctx2tool-tab-logs" style="display:none;">
         <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-          <button id="ctx2tool-clear-logs" style="padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;cursor:pointer;">清空日志</button>
+          <button id="ctx2tool-clear-logs" class="c2t-btn-secondary" style="padding:5px 10px;font-size:12px;" type="button">清空日志</button>
         </div>
-        <div id="ctx2tool-log-list" style="white-space:pre-wrap;line-height:1.45;font-size:12px;"></div>
+        <div id="ctx2tool-log-list"></div>
       </div>
     `;
 
@@ -318,6 +618,12 @@
     parentDoc.body.appendChild(backdrop);
 
     parentDoc.getElementById('ctx2tool-close').onclick = closePanel;
+    parentDoc.getElementById('ctx2tool-theme-toggle').onclick = () => {
+      const nextTheme = CONFIG.theme === 'dark' ? 'light' : 'dark';
+      applyTheme(nextTheme);
+      saveConfig(CONFIG);
+    };
+
     parentDoc.getElementById('ctx2tool-tabbtn-settings').onclick = () => switchTab('settings');
     parentDoc.getElementById('ctx2tool-tabbtn-logs').onclick = () => switchTab('logs');
     parentDoc.getElementById('ctx2tool-clear-logs').onclick = () => {
@@ -481,6 +787,7 @@
     if (typeof eventRemoveListener === 'function') {
       eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
     }
+    parentDoc.getElementById('ctx2tool-style')?.remove();
     parentDoc.getElementById('ctx2tool-wand-item')?.remove();
     parentDoc.getElementById('ctx2tool-float-btn')?.remove();
     parentDoc.getElementById('ctx2tool-backdrop')?.remove();
