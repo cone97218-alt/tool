@@ -3,20 +3,20 @@
 // 入口注入到酒馆「魔法棒菜单（#extensionsMenu）」，不常态占用屏幕
 
 (() => {
-  const VERSION = '1.2.0';
+  const VERSION = '1.2.1';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
 
   const DEFAULT_CONFIG = {
     // 总开关：关闭后不拦截、不修改任何请求
     enabled: true,
 
+    // 'all_with_placeholder' = 连最后一条也全部塞进工具描述（messages 留空消息或自定义占位）
     // 'all'                  = 除最后一条外全部塞进工具描述（最后一条留在 messages）
-    // 'all_with_placeholder' = 连最后一条也全部塞进工具描述（messages 用占位符顶住）
     // 'system_only'          = 只把 system 消息塞进工具描述，保留聊天记录
-    mode: 'all',
+    mode: 'all_with_placeholder',
 
-    // mode 为 'all_with_placeholder' 时填入 messages 的占位内容
-    placeholderText: '.',
+    // mode 为 'all_with_placeholder' 时填入 messages 的内容（支持留空 ""、空格或自定义文本）
+    placeholderText: '',
 
     // 工具名称（只允许字母、数字、下划线）
     toolName: 'context_preset',
@@ -276,8 +276,8 @@
         </div>
 
         <div id="ctx2tool-placeholder-wrap" style="margin-bottom:10px;">
-          <div style="margin-bottom:4px;">占位消息内容（messages 留底）</div>
-          <input id="ctx2tool-cfg-placeholder" type="text" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);" />
+          <div style="margin-bottom:4px;">messages 留底内容（留空即发空消息，或填引导词）</div>
+          <input id="ctx2tool-cfg-placeholder" type="text" placeholder="留空即空消息 &quot;&quot;，或填如：请使用工具" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;background:#2b2b32;color:#fff;border:1px solid rgba(255,255,255,0.2);" />
         </div>
 
         <div style="margin-bottom:10px;">
@@ -338,7 +338,7 @@
       CONFIG = Object.assign({}, CONFIG, {
         enabled: parentDoc.getElementById('ctx2tool-cfg-enabled').checked,
         mode: parentDoc.getElementById('ctx2tool-cfg-mode').value,
-        placeholderText: rawPlaceholder || DEFAULT_CONFIG.placeholderText,
+        placeholderText: rawPlaceholder,
         toolName: safeToolName,
         disableToolCall: parentDoc.getElementById('ctx2tool-cfg-disablecall').checked,
         enableLog: parentDoc.getElementById('ctx2tool-cfg-enablelog').checked,
