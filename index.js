@@ -3,8 +3,9 @@
 // 入口注入到酒馆「魔法棒菜单（#extensionsMenu）」，支持日间/夜间双主题一键切换
 
 (() => {
-  const VERSION = '1.4.0';
+  const VERSION = '1.4.1';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
+  const MAX_FULL_PROMPT_LOGS = 5;
 
   const DEFAULT_CONFIG = {
     // 总开关：关闭后不拦截、不修改任何请求
@@ -81,11 +82,22 @@
     } catch (_) {}
   }
 
-  function addLog(level, summary, detail = '') {
+  function addLog(level, summary, detail = '', fullPrompt = '') {
     if (!CONFIG.enableLog && level !== 'ERR') return;
     const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    logs.unshift({ time, level, summary, detail });
+    logs.unshift({ time, level, summary, detail, fullPrompt });
     if (logs.length > CONFIG.maxLogs) logs.pop();
+
+    // 仅保留最近 5 条带完整提示词的记录，释放更早记录的内存占用
+    let fullCount = 0;
+    for (const item of logs) {
+      if (item.fullPrompt) {
+        fullCount += 1;
+        if (fullCount > MAX_FULL_PROMPT_LOGS) {
+          item.fullPrompt = '';
+        }
+      }
+    }
 
     console.log(`[ContextToTool v${VERSION}][${level}] ${summary}`, detail || '');
     renderLogList();
@@ -371,6 +383,32 @@
         white-space: pre-wrap;
       }
 
+      #ctx2tool-panel .c2t-full-prompt {
+        margin-top: 6px;
+        padding: 8px;
+        max-height: 42vh;
+        overflow-y: auto;
+        border-radius: 6px;
+        background: var(--c2t-bg);
+        border: 1px solid var(--c2t-border);
+        color: var(--c2t-text);
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      #ctx2tool-panel .c2t-copy-btn {
+        margin-left: 8px;
+        padding: 2px 8px;
+        font-size: 11px;
+        border-radius: 5px;
+        border: 1px solid var(--c2t-border);
+        background: var(--c2t-bg);
+        color: var(--c2t-text);
+        cursor: pointer;
+      }
+
       #ctx2tool-panel .c2t-empty {
         text-align: center;
         color: var(--c2t-muted);
@@ -426,7 +464,7 @@
     }
 
     listEl.innerHTML = logs
-      .map((item) => {
+      .map((item, idx) => {
         const colorVar =
           item.level === 'ERR'
             ? 'var(--c2t-err)'
@@ -434,16 +472,44 @@
               ? 'var(--c2t-warn)'
               : 'var(--c2t-ok)';
         const detailHtml = item.detail
-          ? `<details style="margin-top:4px;"><summary style="color:var(--c2t-link);cursor:pointer;">展开详情</summary><div class="c2t-log-detail">${escapeHtml(item.detail)}</div></details>`
+          ? `<details style="margin-top:4px;"><summary style="color:var(--c2t-link);cursor:pointer;">展开请求信息</summary><div class="c2t-log-detail">${escapeHtml(item.detail)}</div></details>`
+          : '';
+        const fullPromptHtml = item.fullPrompt
+          ? `<details style="margin-top:4px;"><summary style="color:var(--c2t-link);cursor:pointer;">展开完整提示词（${item.fullPrompt.length} 字）<button type="button" class="c2t-copy-btn" data-copy-idx="${idx}">复制</button></summary><div class="c2t-full-prompt">${escapeHtml(item.fullPrompt)}</div></details>`
           : '';
         return `
           <div class="c2t-log-item">
             <div><span style="color:${colorVar};font-weight:600;">[${item.time} ${item.level}]</span> ${escapeHtml(item.summary)}</div>
             ${detailHtml}
+            ${fullPromptHtml}
           </div>
         `;
       })
       .join('');
+
+    listEl.querySelectorAll('.c2t-copy-btn').forEach((btn) => {
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = Number(btn.getAttribute('data-copy-idx'));
+        const text = logs[idx]?.fullPrompt;
+        if (!text) return;
+        try {
+          await (parentWin.navigator?.clipboard || navigator.clipboard).writeText(text);
+          if (typeof toastr !== 'undefined') toastr.success('已复制完整提示词', `ContextToTool v${VERSION}`);
+        } catch (_) {
+          const ta = parentDoc.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          parentDoc.body.appendChild(ta);
+          ta.select();
+          parentDoc.execCommand('copy');
+          ta.remove();
+          if (typeof toastr !== 'undefined') toastr.success('已复制完整提示词', `ContextToTool v${VERSION}`);
+        }
+      };
+    });
   }
 
   function syncSettingsUI() {
@@ -779,16 +845,13 @@
       }
 
       const summary = `打包 ${toPack.length} 条 → 工具描述（${packedText.length} 字），messages 剩 ${remaining.length} 条`;
-      const previewHead = packedText.slice(0, 300);
-      const previewTail = packedText.length > 600 ? `\n...\n${packedText.slice(-300)}` : '';
       const detail =
         `版本: v${VERSION} | 模式: ${CONFIG.mode}\n` +
         `API来源: ${data.chat_completion_source ?? '未知'}\n` +
         `工具名: ${CONFIG.toolName} | 工具数: ${data.tools.length} | tool_choice: ${data.tool_choice ?? '未设置'}\n` +
-        `保留的 messages:\n${JSON.stringify(remaining, null, 2)}\n\n` +
-        `description 预览:\n${previewHead}${previewTail}`;
+        `保留的 messages:\n${JSON.stringify(remaining, null, 2)}`;
 
-      addLog('OK', summary, detail);
+      addLog('OK', summary, detail, packedText);
       if (CONFIG.showToast && typeof toastr !== 'undefined') {
         toastr.info(summary, `ContextToTool v${VERSION}`);
       }
