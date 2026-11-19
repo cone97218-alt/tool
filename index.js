@@ -3,7 +3,7 @@
 // 入口注入魔法棒菜单（#extensionsMenu），可选注入 QR 栏快捷日志按钮（#qr--bar）
 
 (() => {
-  const VERSION = '1.5.0';
+  const VERSION = '1.6.0';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
   const MAX_PROMPT_LOGS = 5;
 
@@ -14,6 +14,8 @@
     placeholderText: '',
     toolName: 'context_preset',
     disableToolCall: false,
+    onlyMainChat: true, // 跳过后台静默调用（总结、插件 quiet 请求等）
+    apiFilter: '', // 可选：仅对匹配此关键词的模型名/URL生效（逗号分隔，留空不限）
     enableLog: true,
     showQrLogBtn: false,
     showToast: true,
@@ -65,6 +67,7 @@
   let activeTab = 'settings'; // 'settings' | 'logs'
   let selectedLogIdx = 0;
   let showMetaBox = false;
+  let lastGenType = 'normal';
   let wandTimer = null;
   let qrTimer = null;
   let qrObserver = null;
@@ -603,6 +606,8 @@
     const placeholderEl = parentDoc.getElementById('ctx2tool-cfg-placeholder');
     const toolNameEl = parentDoc.getElementById('ctx2tool-cfg-toolname');
     const disableCallEl = parentDoc.getElementById('ctx2tool-cfg-disablecall');
+    const onlyMainEl = parentDoc.getElementById('ctx2tool-cfg-onlymain');
+    const apiFilterEl = parentDoc.getElementById('ctx2tool-cfg-apifilter');
     const enableLogEl = parentDoc.getElementById('ctx2tool-cfg-enablelog');
     const showQrEl = parentDoc.getElementById('ctx2tool-cfg-showqr');
     const showToastEl = parentDoc.getElementById('ctx2tool-cfg-showtoast');
@@ -615,6 +620,8 @@
     placeholderWrap.style.display = CONFIG.mode === 'all_with_placeholder' ? 'block' : 'none';
     toolNameEl.value = CONFIG.toolName;
     disableCallEl.checked = !!CONFIG.disableToolCall;
+    onlyMainEl.checked = CONFIG.onlyMainChat !== false;
+    apiFilterEl.value = CONFIG.apiFilter || '';
     enableLogEl.checked = !!CONFIG.enableLog;
     showQrEl.checked = !!CONFIG.showQrLogBtn;
     showToastEl.checked = !!CONFIG.showToast;
@@ -748,6 +755,19 @@
         </div>
 
         <div class="c2t-row">
+          <span>仅主对话生效</span>
+          <label class="c2t-switch">
+            <input id="ctx2tool-cfg-onlymain" type="checkbox" />
+            <span class="c2t-slider"></span>
+          </label>
+        </div>
+
+        <div class="c2t-field">
+          <label class="c2t-label" for="ctx2tool-cfg-apifilter">主 API 白名单</label>
+          <input id="ctx2tool-cfg-apifilter" class="c2t-input" type="text" placeholder="模型名或URL关键词，逗号分隔，留空不限" />
+        </div>
+
+        <div class="c2t-row">
           <span>tool_choice: none</span>
           <label class="c2t-switch">
             <input id="ctx2tool-cfg-disablecall" type="checkbox" />
@@ -867,6 +887,8 @@
         placeholderText: rawPlaceholder,
         toolName: safeToolName,
         disableToolCall: parentDoc.getElementById('ctx2tool-cfg-disablecall').checked,
+        onlyMainChat: parentDoc.getElementById('ctx2tool-cfg-onlymain').checked,
+        apiFilter: (parentDoc.getElementById('ctx2tool-cfg-apifilter').value || '').trim(),
         enableLog: parentDoc.getElementById('ctx2tool-cfg-enablelog').checked,
         showQrLogBtn: parentDoc.getElementById('ctx2tool-cfg-showqr').checked,
         showToast: parentDoc.getElementById('ctx2tool-cfg-showtoast').checked,
@@ -898,11 +920,35 @@
     switchTab('settings');
   }
 
+  const genStartHandler = (type) => {
+    lastGenType = type || 'normal';
+  };
+
   const handler = (data) => {
     if (!CONFIG.enabled) return;
 
     try {
       if (!data || !Array.isArray(data.messages) || data.messages.length === 0) return;
+
+      // 1. 跳过后台静默调用（总结、插件 quiet 请求等）
+      if (CONFIG.onlyMainChat && (data.type === 'quiet' || lastGenType === 'quiet')) {
+        return;
+      }
+
+      // 2. 主 API 白名单过滤（按模型名 / custom_url / source 匹配）
+      const filterRaw = (CONFIG.apiFilter || '').trim();
+      if (filterRaw) {
+        const keywords = filterRaw
+          .split(/[,，]/)
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean);
+        if (keywords.length > 0) {
+          const target = `${data.model || ''} ${data.custom_url || ''} ${data.chat_completion_source || ''}`.toLowerCase();
+          if (!keywords.some((kw) => target.includes(kw))) {
+            return;
+          }
+        }
+      }
 
       let toPack = [];
       let remaining = [];
@@ -971,7 +1017,9 @@
 
       const summary = `${toPack.length} 条 · ${packedText.length} 字`;
       const meta =
-        `模式: ${CONFIG.mode} | 来源: ${data.chat_completion_source ?? '未知'}\n` +
+        `模式: ${CONFIG.mode} | 类型: ${data.type || lastGenType}\n` +
+        `来源: ${data.chat_completion_source ?? '未知'} | 模型: ${data.model ?? '未知'}\n` +
+        `URL: ${data.custom_url || '默认'}\n` +
         `工具: ${CONFIG.toolName} (${data.tools.length}) | tool_choice: ${data.tool_choice ?? '未设置'}\n` +
         `messages:\n${JSON.stringify(remaining, null, 2)}`;
 
@@ -995,12 +1043,18 @@
   };
 
   initUI();
+  if (tavern_events.GENERATION_STARTED) {
+    eventOn(tavern_events.GENERATION_STARTED, genStartHandler);
+  }
   eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
 
   globalThis.__ctx2toolCleanup = () => {
     if (wandTimer) clearTimeout(wandTimer);
     removeQrLogBtn();
     if (typeof eventRemoveListener === 'function') {
+      if (tavern_events.GENERATION_STARTED) {
+        eventRemoveListener(tavern_events.GENERATION_STARTED, genStartHandler);
+      }
       eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
     }
     parentDoc.getElementById('ctx2tool-style')?.remove();
