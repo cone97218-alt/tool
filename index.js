@@ -3,7 +3,7 @@
 // 入口注入魔法棒菜单（#extensionsMenu），可选注入 QR 栏快捷日志按钮（#qr--bar）
 
 (() => {
-  const VERSION = '1.6.1';
+  const VERSION = '1.6.2';
   const STORAGE_KEY = 'ctx2tool_settings_v1';
   const MAX_PROMPT_LOGS = 5;
 
@@ -1074,7 +1074,12 @@
   if (tavern_events.CHAT_CHANGED) {
     eventOn(tavern_events.CHAT_CHANGED, chatChangedHandler);
   }
-  eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
+  // 使用 eventMakeLast 确保在所有其他插件/脚本注入完 messages 之后最后执行打包
+  if (typeof eventMakeLast === 'function') {
+    eventMakeLast(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
+  } else {
+    eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handler);
+  }
 
   globalThis.__ctx2toolCleanup = () => {
     if (wandTimer) clearTimeout(wandTimer);
